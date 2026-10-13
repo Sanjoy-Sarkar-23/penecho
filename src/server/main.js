@@ -4497,19 +4497,21 @@ ${WIDGET_PATCH_FORMAT_POLICY}`,
   if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "Method Not Allowed", "text/plain");
   let requested;
   try { requested = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname); } catch { return send(res, 400, "Bad Request", "text/plain; charset=utf-8"); }
-  const requestHostname=requestHost(req)?.hostname,
-    trustedLocalPage=isAllowedCliHost(requestHostname),
-    served=requested==="/index.html"&&(!trustedLocalPage||localAccessMode!=="open"&&!hasAiSession(req))?"/access.html":requested,
+  const alogyanSso = url.searchParams.has("alogyanTeacherId") || url.searchParams.has("alogyanToken") || url.searchParams.has("teacherId"),
+    requestHostname=requestHost(req)?.hostname,
+    trustedLocalPage=isAllowedCliHost(requestHostname) || alogyanSso,
+    isAuthorized = localAccessMode === "open" || hasAiSession(req) || alogyanSso,
+    served=requested==="/index.html"&&(!trustedLocalPage||!isAuthorized)?"/access.html":requested,
     file=path.resolve(PUBLIC,"."+served);
   if (!file.startsWith(PUBLIC + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, "Not found", "text/plain");
   const host = requestHost(req),
     loopbackFrameSources = isLoopbackHostname(host?.hostname) ? ` http://localhost:${host.port || "80"} http://127.0.0.1:${host.port || "80"}` : "",
     pageOrigin=canonicalRequestOrigin(req),
     sameOriginSocketSource=pageOrigin?` ${pageOrigin.protocol==="https:"?"wss":"ws"}://${pageOrigin.host}`:"",
-    frameAncestors = (IS_REMOTE_ALLOWED || process.env.PENECHO_ALLOW_EMBED === "true") ? "*" : "'none'",
-    corpPolicy = (IS_REMOTE_ALLOWED || process.env.PENECHO_ALLOW_EMBED === "true") ? "cross-origin" : "same-origin",
+    frameAncestors = (IS_REMOTE_ALLOWED || process.env.PENECHO_ALLOW_EMBED === "true" || alogyanSso) ? "*" : "'none'",
+    corpPolicy = (IS_REMOTE_ALLOWED || process.env.PENECHO_ALLOW_EMBED === "true" || alogyanSso) ? "cross-origin" : "same-origin",
     headers = { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control":"no-store", "Content-Security-Policy":`default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'sha256-JLEjeN9e5dGsz5475WyRaoA4eQOdNPxDIeUhclnJDCE=' 'sha256-mQyxHEuwZJqpxCw3SLmc4YOySNKXunyu2Oiz1r3/wAE=' 'sha256-OCf+kv5Asiwp++8PIevKBYSgnNLNUZvxAp4a7wMLuKA='; img-src 'self' blob: data: ${CLOUD_ACTIVITY_IMAGE_SOURCE} https://github.com https://*.githubusercontent.com; connect-src 'self'${sameOriginSocketSource}; frame-src 'self'${loopbackFrameSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'none'`, "Referrer-Policy":"no-referrer", "X-Content-Type-Options":"nosniff", "Cross-Origin-Resource-Policy":corpPolicy };
-  if (requested === "/index.html" && trustedLocalPage && (localAccessMode === "open" || hasAiSession(req))) headers["Set-Cookie"] = aiSessionCookie(req);
+  if (requested === "/index.html" && trustedLocalPage && isAuthorized) headers["Set-Cookie"] = aiSessionCookie(req);
   if (requested.startsWith("/vendor/mathjax-3.2.2/") && file.startsWith(path.join(PUBLIC,"vendor","mathjax-3.2.2") + path.sep)) {
     headers["Cache-Control"] = "public, max-age=31536000, immutable";
     headers["CDN-Cache-Control"] = "public, max-age=31536000, immutable";
