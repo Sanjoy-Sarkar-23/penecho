@@ -336,7 +336,19 @@ const LOCAL_ACCESS_CLIENT_FAILURE_LIMIT = 5;
 const LOCAL_ACCESS_GLOBAL_FAILURE_LIMIT = 30;
 const LOCAL_ACCESS_CLIENT_COOLDOWN_MS = 30_000;
 const LOCAL_ACCESS_GLOBAL_COOLDOWN_MS = 60_000;
-let localAccessMode = process.env.NODE_ENV === "test" && process.env.PENECHO_TEST_OPEN_ACCESS === "1" ? "open" : "undecided";
+const IS_REMOTE_ALLOWED = Boolean(
+  process.env.RENDER === "true" ||
+  process.env.PUBLIC_ACCESS === "true" ||
+  process.env.PENECHO_PUBLIC_ACCESS === "true" ||
+  process.env.PENECHO_ALLOW_REMOTE === "true" ||
+  process.env.ALLOW_REMOTE === "true"
+);
+let localAccessMode = (
+  (process.env.NODE_ENV === "test" && process.env.PENECHO_TEST_OPEN_ACCESS === "1") ||
+  process.env.PENECHO_OPEN_ACCESS === "true" ||
+  process.env.PENECHO_OPEN_ACCESS === "1" ||
+  (IS_REMOTE_ALLOWED && process.env.PENECHO_REQUIRE_PIN !== "true")
+) ? "open" : "undecided";
 let localAccessPinSalt = null;
 let localAccessPinHash = null;
 let localAccessRevision = 0;
@@ -2038,17 +2050,20 @@ function normalizedIp(value) {
   return address.startsWith("::ffff:") && net.isIP(address.slice(7)) === 4 ? address.slice(7) : address;
 }
 function isLanClient(address) {
+  if (IS_REMOTE_ALLOWED) return true;
   const ip = normalizedIp(address), version = net.isIP(ip);
   if (!version) return false;
   if (isLoopback(ip)) return true;
   return LOCAL_NETWORKS.check(ip, version === 4 ? "ipv4" : "ipv6");
 }
 function isAllowedCliHost(hostname) {
+  if (IS_REMOTE_ALLOWED) return true;
   const value = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "").split("%", 1)[0];
   return isLoopbackHostname(value) || LOCAL_HOSTNAMES.has(value) || LOCAL_INTERFACE_ADDRESSES.has(value);
 }
 function requestHost(req) {
-  const value = typeof req.headers.host === "string" ? req.headers.host.trim() : "";
+  const rawValue = req.headers["x-forwarded-host"] || req.headers.host;
+  const value = typeof rawValue === "string" ? rawValue.split(",")[0].trim() : "";
   if (!value || value.includes("/") || value.includes("\\") || value.includes("@")) return null;
   try {
     const url = new URL(`http://${value}`);
@@ -2056,6 +2071,11 @@ function requestHost(req) {
   } catch {
     return null;
   }
+}
+function requestProtocol(req) {
+  const forwarded = typeof req.headers["x-forwarded-proto"] === "string" ? req.headers["x-forwarded-proto"].split(",")[0].trim().toLowerCase() : "";
+  if (forwarded === "https" || forwarded === "http") return forwarded;
+  return req.socket?.encrypted ? "https" : "http";
 }
 function hostMatchesOrigin(host, origin) {
   if (!host || !origin || host.hostname.toLowerCase() !== origin.hostname.toLowerCase()) return false;
@@ -2066,8 +2086,9 @@ function hostMatchesOrigin(host, origin) {
 function canonicalRequestOrigin(req) {
   const host = requestHost(req);
   if (!host) return null;
-  if (!LOCAL_CLI) return new URL(`http://${host.host}`);
-  return isAllowedCliHost(host.hostname) ? new URL(`http://${host.host}`) : null;
+  const proto = requestProtocol(req);
+  if (IS_REMOTE_ALLOWED || !LOCAL_CLI) return new URL(`${proto}://${host.host}`);
+  return isAllowedCliHost(host.hostname) ? new URL(`${proto}://${host.host}`) : null;
 }
 function aiSessionCookieName(req) {
   const host = canonicalRequestOrigin(req)?.host.toLowerCase();
